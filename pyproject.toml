@@ -1,0 +1,51 @@
+[project]
+name = "gentle"
+version = "0.1.0"
+description = "GENTLE (AAAI'24) - Generalizable Task Representation Learning for Offline Meta-RL"
+requires-python = "==3.10.*"
+dependencies = [
+    # --- core numerics / DL ---
+    "numpy>=1.26,<2.0",
+    "torch>=2.7",
+    "scipy>=1.10",
+    "scikit-learn>=1.3",
+    "pandas>=2.0",
+    # --- RL env API (old gym API: 4-tuple step, env.seed) ---
+    "gym==0.25.2",
+    # --- SAC data-generation stack (pytorch_sac uses hydra 0.11 API) ---
+    "hydra-core==0.11.3",
+    "omegaconf==1.4.1",
+    "setuptools<81",           # hydra 0.11 imports pkg_resources
+    # --- logging / CLI / misc ---
+    "click>=8.1",
+    "tensorboard>=2.14",
+    "tensorboardx>=2.6",
+    "termcolor>=2.0",
+    "gtimer>=1.0.0b5",
+    "joblib>=1.3",
+    "matplotlib>=3.7",
+    "imageio>=2.31",
+    "pillow>=10.0",
+    "python-dateutil>=2.8",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+# Only needed for Cheetah/Ant/Hopper/Walker (MuJoCo) domains.
+mujoco = [
+    "mujoco-py==2.1.2.14",
+    "cython<3",
+]
+
+[tool.uv]
+# torch cu128 wheels (RTX 5090 / sm_120 requires CUDA 12.8+)
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
+[tool.setuptools]
+py-modules = []

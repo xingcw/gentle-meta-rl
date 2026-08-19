@@ -14,6 +14,7 @@ from .video import VideoRecorder
 from .logger import Logger
 from .replay_buffer import ReplayBuffer
 from . import utils
+from rlkit.paths import goal_dir_for
 
 # import dmc2gym
 import hydra
@@ -38,10 +39,22 @@ import hydra
 #
 #     return env
 
+def _as_trj_array(trj):
+    """Pack a trajectory of [obs, action, reward, next_obs] rows.
+
+    The rows are inhomogeneous (arrays alongside a scalar reward), which numpy
+    >= 1.24 refuses to infer; the loaders read these back with allow_pickle.
+    """
+    arr = np.empty((len(trj), 4), dtype=object)
+    for i, row in enumerate(trj):
+        for j, item in enumerate(row):
+            arr[i, j] = item
+    return arr
+
+
 class Workspace(object):
     def __init__(self, cfg, env_name, env=None, mujoco=False, goal_idx=0, eval=False):
-        self.work_dir = '/data/zrz'
-        self.work_dir = os.path.join(self.work_dir, 'gentle_data', env_name, f'goal_idx{goal_idx}')
+        self.work_dir = goal_dir_for(env_name, goal_idx)
         os.makedirs(self.work_dir, exist_ok=True)
         print(f'workspace: {self.work_dir}')
 
@@ -215,7 +228,7 @@ class Workspace(object):
                 episode_reward += reward
                 num_samples += 1
             print(f"Episode {episode} return {episode_reward}, num_samples {num_samples}")
-            np.save(os.path.join(self.work_dir, f'trj_evalsample{episode}_step{checkpoint_step}.npy'), np.array(trj))
+            np.save(os.path.join(self.work_dir, f'trj_evalsample{episode}_step{checkpoint_step}.npy'), _as_trj_array(trj))
 
 
 

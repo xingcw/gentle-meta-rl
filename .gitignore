@@ -19,3 +19,13 @@ __pycache__
 # bkdevops prebuild
 .bk_pb/
 build.yml
+
+# reproduction outputs
+/data/
+/logs/
+/run_logs/
+run_logs_main.log
+.venv/
+
+# the reproduction pipeline is source, not a scratch script (*.sh is ignored above)
+!run_point_robot.sh

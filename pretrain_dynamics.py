@@ -16,6 +16,7 @@ import rlkit.torch.pytorch_util as ptu
 from configs.default import default_config
 from numpy.random import default_rng
 from rlkit.data_management.env_replay_buffer import MultiTaskReplayBuffer
+from rlkit.paths import dynamics_dir_for, resolve_data_dir
 
 rng = default_rng()
 
@@ -121,8 +122,10 @@ def experiment(variant, seed=None):
         task_dynamics.train(data)
         print(f"Task {task_idx} finished training")
     
-    os.makedirs('/data/zrz/gentle_data/asset/dynamics/'+variant['env_name']+f'/expert_seed{seed}', exist_ok=True)
-    task_dynamics.save('/data/zrz/gentle_data/asset/dynamics/'+variant['env_name']+f'/expert_seed{seed}')
+    dynamics_path = dynamics_dir_for(variant['env_name'], seed)
+    os.makedirs(dynamics_path, exist_ok=True)
+    task_dynamics.save(dynamics_path)
+    print(f'saved dynamics ensemble to {dynamics_path}')
 
 
 def deep_update_dict(fr, to):
@@ -138,7 +141,7 @@ def deep_update_dict(fr, to):
 @click.command()
 @click.argument('config', default=None)
 @click.option('--gpu', default=0)
-@click.option('--seed_list', default=[0])
+@click.option('--seed_list', default='[0]', help='e.g. "[0,1,2]"')
 
 def main(config, gpu, seed_list):
 
@@ -147,11 +150,12 @@ def main(config, gpu, seed_list):
         with open(os.path.join(config)) as f:
             exp_params = json.load(f)
         variant = deep_update_dict(exp_params, variant)
+    resolve_data_dir(variant)
     variant['util_params']['gpu_id'] = gpu
 
+    if isinstance(seed_list, str):
+        seed_list = ast.literal_eval(seed_list)
     if len(seed_list) > 1:
-        if isinstance(seed_list, str):
-            seed_list = ast.literal_eval(seed_list)
         p = mp.Pool(len(seed_list))
         p.starmap(experiment, product([variant], seed_list))
     else:

@@ -12,6 +12,7 @@ default_config = dict(
         randomize_tasks=True, # shuffle the tasks after creating them
         max_episode_steps=200, # built-in max episode length for this environment
     ),
+    sac_params=dict(), # overrides applied to rlkit/torch/sac/pytorch_sac/config/train.yaml
     algo_params=dict(
         meta_batch=10, # number of tasks to average the gradient across
         batch_size=256, # number of transitions in the RL batch

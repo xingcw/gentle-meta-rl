@@ -26,6 +26,21 @@ def deep_update_dict(fr, to):
 
 initialize(config_dir="rlkit/torch/sac/pytorch_sac/config/")
 cfg = compose("train.yaml")
+
+
+def apply_sac_params(cfg, variant):
+    """Let a config JSON override entries of pytorch_sac's train.yaml.
+
+    Needed because the checkpoint step consumed downstream (algo_params.train_epoch)
+    must line up with save_frequency, which differs per domain.
+    """
+    for key, value in variant.get('sac_params', {}).items():
+        if key not in cfg:
+            raise KeyError(f"unknown sac_params key '{key}' (not in train.yaml)")
+        cfg[key] = value
+    return cfg
+
+
 def experiment(variant, cfg=cfg, goal_idx=0, seed=0,  eval=False):
     env = NormalizedBoxEnv(ENVS[variant['env_name']](**variant['env_params']))
     if seed is not None:
@@ -50,7 +65,8 @@ def experiment(variant, cfg=cfg, goal_idx=0, seed=0,  eval=False):
 @click.option("--docker", is_flag=True, default=False)
 @click.option("--debug", is_flag=True, default=False)
 @click.option("--eval", is_flag=True, default=False)
-def main(config, gpu, docker, debug, eval, goal_idx=0, seed=0):
+@click.option("--n_workers", default=10, help="tasks trained concurrently")
+def main(config, gpu, docker, debug, eval, n_workers, goal_idx=0, seed=0):
     variant = default_config
     cwd = os.getcwd()
     files = os.listdir(cwd)
@@ -60,12 +76,13 @@ def main(config, gpu, docker, debug, eval, goal_idx=0, seed=0):
         variant = deep_update_dict(exp_params, variant)
     variant['util_params']['gpu_id'] = gpu
 
+    apply_sac_params(cfg, variant)
     cfg.gpu_id = gpu
     print('cfg.agent', cfg.agent)
     print(list(range(variant['env_params']['n_tasks'])))
     # multi-processing
 
-    n = 10
+    n = min(n_workers, variant['env_params']['n_tasks'])
     p = mp.Pool(n)
     if variant['env_params']['n_tasks'] > 1:
         n_tasks = variant['env_params']['n_tasks']

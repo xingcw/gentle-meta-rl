@@ -23,6 +23,7 @@ import rlkit.torch.pytorch_util as ptu
 from configs.default import default_config
 from numpy.random import default_rng
 from rlkit.torch.algo.gentle import GENTLE
+from rlkit.paths import dynamics_dir_for, resolve_data_dir
 
 rng = default_rng()
 
@@ -103,7 +104,7 @@ def experiment(variant, seed=None):
                                      use_next_obs_in_context=use_next_obs_in_context,
                                      ensemble_size=variant['algo_params']['ensemble_size'],
                                      dynamics_weight_decay=[2.5e-5, 5e-5, 7.5e-5])
-    task_dynamics.load('/data/zrz/gentle_data/asset/dynamics/'+variant['env_name']+'/'+f'expert_seed{seed}')
+    task_dynamics.load(dynamics_dir_for(variant['env_name'], seed))
 
     policy = TanhGaussianPolicy(
         hidden_sizes=[net_size, net_size, net_size],
@@ -170,7 +171,7 @@ def deep_update_dict(fr, to):
 @click.option('--gpu', default=0)
 @click.option('--debug', default=0)
 @click.option('--algo_type', default='gentle')  
-@click.option('--seed_list', default=[0])
+@click.option('--seed_list', default='[0]', help='e.g. "[0,1,2]"')
 @click.option('--output_prefix', default='')
 def main(config, gpu, debug, algo_type, seed_list, output_prefix):
 
@@ -179,6 +180,7 @@ def main(config, gpu, debug, algo_type, seed_list, output_prefix):
         with open(os.path.join(config)) as f:
             exp_params = json.load(f)
         variant = deep_update_dict(exp_params, variant)
+    resolve_data_dir(variant)
     variant['util_params']['gpu_id'] = gpu
     variant['util_params']['debug'] = debug
     variant['algo_type'] = algo_type
@@ -186,9 +188,9 @@ def main(config, gpu, debug, algo_type, seed_list, output_prefix):
     variant['util_params']['base_log_dir'] = './logs'
 
     # multi-processing
+    if isinstance(seed_list, str):
+        seed_list = ast.literal_eval(seed_list)
     if len(seed_list) > 1:
-        if isinstance(seed_list, str):
-            seed_list = ast.literal_eval(seed_list)
         p = mp.Pool(len(seed_list))
         p.starmap(experiment, product([variant], seed_list))
     else:

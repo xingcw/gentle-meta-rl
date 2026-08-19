@@ -6,9 +6,9 @@
         "n_tasks": 20,
         "max_episode_steps": 20
     },
-    "net_size":64,
+    "net_size": 64,
     "algo_params": {
-        "meta_batch":10,
+        "meta_batch": 10,
         "num_iterations": 500,
         "num_initial_steps": 200,
         "num_steps_prior": 400,
@@ -17,13 +17,18 @@
         "num_train_steps_per_itr": 400,
         "embedding_batch_size": 256,
         "embedding_mini_batch_size": 256,
-        "discount": 0.90,
+        "discount": 0.9,
         "n_trj": 100,
-        "train_epoch":1e5,
-        "eval_epoch": 1e5,
+        "train_epoch": 100000.0,
+        "eval_epoch": 100000.0,
         "sample": 1,
         "max_path_length": 20,
-        "data_dir": "/data/zrz/gentle_data/point-robot",
         "online_sample_num": 20
+    },
+    "sac_params": {
+        "num_train_steps": 100000,
+        "save_frequency": 100000,
+        "num_seed_steps": 1000,
+        "eval_frequency": 10000
     }
 }

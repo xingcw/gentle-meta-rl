@@ -60,7 +60,10 @@ class NormalizedBoxEnv(ProxyEnv, Serializable):
         # Or else serialization gets delegated to the wrapped_env. Serialize
         # this env separately from the wrapped_env.
         self._serializable_initialized = False
-        self._should_normalize = True
+        # Off until update_obs_mean_var() supplies statistics: data generation
+        # runs on raw observations, which are normalized at load time instead.
+        self._should_normalize = False
+        self.normalizer_type = None
         Serializable.quick_init(self, locals())
         ProxyEnv.__init__(self, env)
 
