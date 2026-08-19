@@ -68,6 +68,7 @@ class GentleConfig:
     relabel_data_ratio: float = 0.95
     num_aug_neg_tasks: int = struct.field(pytree_node=False, default=3)
     relabel_sample_mult: int = struct.field(pytree_node=False, default=10)
+    relabel_capacity_blocks: int = struct.field(pytree_node=False, default=0)
     use_next_obs_in_context: bool = struct.field(pytree_node=False, default=False)
 
     @property
@@ -89,8 +90,23 @@ class GentleConfig:
 
     @property
     def relabel_capacity(self):
-        # one positive block plus at most one from every other task
-        return self.relabel_batch * self.num_train_tasks
+        """Rows reserved per task in the relabel buffer.
+
+        The worst case is one positive block plus one from every other task,
+        which makes the buffer O(num_train_tasks^2) and is only reachable if
+        every task happens to draw the same negative. A task actually
+        receives 1 + Poisson(num_aug_neg_tasks) blocks, so past a few dozen
+        tasks the worst-case reservation is orders of magnitude larger than
+        anything that gets written -- 142 GB at 470 tasks against ~4 blocks
+        of expected occupancy.
+
+        `relabel_capacity_blocks` sizes for the tail of that Poisson instead:
+        at num_aug_neg_tasks=3, 16 blocks leaves a 1.2e-7 chance of one task
+        overflowing in one iteration. 0 keeps the worst-case sizing, so
+        existing configs are unaffected.
+        """
+        blocks = self.relabel_capacity_blocks or self.num_train_tasks
+        return self.relabel_batch * blocks
 
 
 @struct.dataclass
@@ -280,7 +296,12 @@ def make_relabel(state, cfg, nets, context_data, dynamics, key):
         target, block = xs
         ctx = jax.lax.dynamic_update_slice(
             ctx, block[None], (target, lengths[target], 0))
-        lengths = lengths.at[target].add(block.shape[0])
+        # dynamic_update_slice clamps a write that would run off the end, so
+        # an overflowing block lands on top of the previous one rather than
+        # erroring; clamp the length to match, otherwise sample_relabel would
+        # draw positions past the rows that exist.
+        lengths = jnp.minimum(lengths.at[target].add(block.shape[0]),
+                              cfg.relabel_capacity)
         return (ctx, lengths), None
 
     positive = relabel_with(tasks)
