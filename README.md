@@ -7,14 +7,56 @@ Dependencies are managed with [uv](https://docs.astral.sh/uv/). The environment 
 pinned in `pyproject.toml` / `uv.lock`:
 
 ```bash
-uv sync
+uv sync --extra cuda   # NVIDIA GPU
+uv sync --extra tpu    # Cloud TPU VM
 ```
 
-This installs Python 3.10, PyTorch with CUDA 12.8 wheels, and the legacy
+The accelerator backend for `gentle_jax` is an extra, because `jax[cuda12]` and
+`jax[tpu]` cannot share an environment; plain `uv sync` leaves JAX on CPU. The
+two extras are declared as conflicting, so switching between them is a re-sync
+rather than a manual uninstall.
+
+This installs Python 3.11, PyTorch with CUDA 12.8 wheels, and the legacy
 `hydra-core==0.11.3` / `gym==0.25.2` stack the code targets. Run everything with
 `uv run python ...` (no `conda activate` needed). The original `environment.yaml`
 is kept for reference only — its `torch==1.9.0+cu111` pin does not support GPUs
 newer than Ampere.
+
+### TPU notes
+
+A v4-8 VM exposes 4 chips. `gentle_jax` runs one seed on one chip, so four seeds
+fit on the node at once:
+
+```bash
+for d in 0 1 2 3; do
+  GENTLE_DATA_DIR=$PWD/data_seed$d SEED=$d REGEN_DATA=1 \
+  TPU_VISIBLE_DEVICES=$d TPU_CHIPS_PER_PROCESS_BOUNDS=1,1,1 \
+  TPU_PROCESS_BOUNDS=1,1,1 TPU_PROCESS_ADDRESSES=local \
+  ./run_point_robot_jax.sh &
+done
+```
+
+`GENTLE_DATA_DIR` has to differ per seed: `--regen-data 1` writes the dataset
+under it, and concurrent seeds would otherwise overwrite each other.
+
+Dropping the `TPU_*` variables instead gives one run the whole node. Stage 1
+then splits its 20 SAC agents across every visible device (5 per chip on a
+v4-8), which is where a run spends ~90% of its time: 1542s -> 450s, a 3.4x
+speedup that takes a full seed from 28.5 to 10.5 minutes. The split is
+automatic -- `run_datagen` shards the vmap task axis over `local_device_count()`
+and falls back to one device when the task count does not divide evenly, so the
+single-GPU path is unaffected.
+
+Which layout to use depends on the unit of work. A 4-seed sweep is faster
+one-seed-per-chip (28.5 min for all four) than sharded seeds run back to back
+(~42 min); sharding wins when iterating on a single configuration.
+
+Sharding changes how XLA partitions the computation, so stage 1 is
+reproducible-in-distribution rather than bit-identical: reset states still match
+exactly, but 100k chaotic SAC steps amplify float32 noise into visibly different
+policies. The collected datasets agree statistically -- mean episode return
+-5.3139 sharded vs -5.3142 on one chip -- and both land inside the paper's error
+bars downstream.
 
 ### MuJoCo domains (optional)
 

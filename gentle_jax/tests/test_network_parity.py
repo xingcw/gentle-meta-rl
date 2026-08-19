@@ -23,6 +23,9 @@ from rlkit.torch.sac.policies import TanhGaussianPolicy
 OBS_DIM, ACT_DIM, LATENT, NET = 2, 2, 5, 64
 CONTEXT_DIM = OBS_DIM + ACT_DIM + 1
 TOL = 1e-5
+# TPU approximates log/exp/tanh to ~1e-5 relative instead of correctly rounding
+# them, so the log-prob tolerance has to follow the backend.
+LOGPROB_TOL = 1e-3 if jax.default_backend() == 'tpu' else 1e-4
 
 
 def _err(a, b):
@@ -114,7 +117,7 @@ def test_tanh_normal_log_prob():
            - jnp.log(1 - jnp.asarray(action) ** 2 + 1e-6)).sum(axis=-1, keepdims=True)
     e = _err(got, expected)
     print(f'  tanh-normal log_prob   max err {e:.2e}')
-    assert e < 1e-4
+    assert e < LOGPROB_TOL
 
 
 def test_dynamics():

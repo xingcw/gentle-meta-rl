@@ -31,13 +31,17 @@ dependencies = [
     "python-dateutil>=2.8",
     "tqdm>=4.66",
     # --- JAX pipeline (gentle_jax) ---
-    "jax[cuda12]>=0.7.1",
+    # The accelerator backend is an extra: --extra cuda for GPUs, --extra tpu
+    # for TPU VMs. Bare jax alone runs on CPU.
+    "jax>=0.7.1",
     "flax>=0.10.7",
     "optax>=0.2.8",
     "chex>=0.1.90",
 ]
 
 [project.optional-dependencies]
+cuda = ["jax[cuda12]>=0.7.1"]
+tpu = ["jax[tpu]>=0.7.1"]
 # Only needed for Cheetah/Ant/Hopper/Walker (MuJoCo) domains.
 mujoco = [
     "mujoco-py==2.1.2.14",
@@ -45,6 +49,9 @@ mujoco = [
 ]
 
 [tool.uv]
+# a single environment cannot hold both accelerator plugins
+conflicts = [[{ extra = "cuda" }, { extra = "tpu" }]]
+
 # torch cu128 wheels (RTX 5090 / sm_120 requires CUDA 12.8+)
 [[tool.uv.index]]
 name = "pytorch-cu128"

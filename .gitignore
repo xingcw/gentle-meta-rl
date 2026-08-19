@@ -22,10 +22,13 @@ build.yml
 
 # reproduction outputs
 /data/
+/data_seed*/
 /logs/
 /run_logs/
+/run_logs_jax/
 run_logs_main.log
 .venv/
 
 # the reproduction pipeline is source, not a scratch script (*.sh is ignored above)
 !run_point_robot.sh
+!run_point_robot_jax.sh

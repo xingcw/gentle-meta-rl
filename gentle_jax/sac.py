@@ -345,14 +345,26 @@ def run_datagen(cfg, data_dir, n_tasks=20, num_episodes=100, seed=0,
     def one_task(k, goal):
         return train_sac(cfg, k, env, env_params.replace(goal=goal))
 
+    # The tasks are independent, so the vmap axis splits across devices with no
+    # cross-device communication: each one trains its own shard of agents.
+    # Falls back to a single device when the task count does not divide evenly,
+    # and is a no-op on one device, which keeps the GPU path unchanged.
+    n_dev = jax.local_device_count()
+    while n_dev > 1 and n_tasks % n_dev:
+        n_dev -= 1
+    mesh = jax.make_mesh((n_dev,), ('task',), devices=jax.local_devices()[:n_dev])
+    by_task = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec('task'))
+
     t0 = time.time()
     with jax.default_matmul_precision(matmul_precision):
-        state, rewards = jax.block_until_ready(jax.jit(jax.vmap(one_task))(
-            jax.random.split(train_key, n_tasks), env_params.goal))
+        keys = jax.device_put(jax.random.split(train_key, n_tasks), by_task)
+        goals = jax.device_put(env_params.goal, by_task)
+        state, rewards = jax.block_until_ready(
+            jax.jit(jax.vmap(one_task), out_shardings=by_task)(keys, goals))
     if verbose:
         ep = np.asarray(rewards).reshape(n_tasks, -1, cfg.max_episode_steps).sum(axis=2)
         print(f'  stage 1: {n_tasks} SAC agents x {cfg.num_train_steps} steps in '
-              f'{time.time() - t0:.0f}s')
+              f'{time.time() - t0:.0f}s ({n_tasks // n_dev} per device x {n_dev})')
         print(f'    mean episode return  first 20 eps {ep[:, :20].mean():7.2f}   '
               f'last 20 eps {ep[:, -20:].mean():7.2f}')
 
