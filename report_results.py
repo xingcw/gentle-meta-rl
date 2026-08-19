@@ -36,9 +36,13 @@ def main():
     ap.add_argument('--logs', default='./logs')
     ap.add_argument('--last', type=int, default=10,
                     help='average over the final N evaluations of each run')
+    ap.add_argument('--glob', default=None,
+                    help='explicit progress.csv glob; use for the JAX pipeline, '
+                         "e.g. './run_logs_jax/progress_seed*.csv'")
     args = ap.parse_args()
 
-    pattern = os.path.join(args.logs, args.env, args.algo, 'seed*', '*', 'progress.csv')
+    pattern = args.glob or os.path.join(args.logs, args.env, args.algo, 'seed*', '*',
+                                        'progress.csv')
     paths = sorted(glob.glob(pattern))
     if not paths:
         raise SystemExit(f'no progress.csv under {pattern}')
@@ -54,7 +58,9 @@ def main():
         if df.empty:
             print(f'  skipping empty {p}')
             continue
-        seed = p.split(os.sep)[-3]
+        parts = p.split(os.sep)
+        seed = next((x for x in reversed(parts) if x.startswith('seed')),
+                    os.path.splitext(parts[-1])[0])
         n = len(df)
         row = [f'  {seed:8s} ({n:4d} iters)']
         for key in LABELS:

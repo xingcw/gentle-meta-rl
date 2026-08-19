@@ -2,7 +2,9 @@
 name = "gentle"
 version = "0.1.0"
 description = "GENTLE (AAAI'24) - Generalizable Task Representation Learning for Offline Meta-RL"
-requires-python = "==3.10.*"
+# 3.11 is the floor for jax >= 0.7, which is the first release whose CUDA
+# kernels work on Blackwell (sm_120); 0.6.x miscompiles there.
+requires-python = "==3.11.*"
 dependencies = [
     # --- core numerics / DL ---
     "numpy>=1.26,<2.0",
@@ -28,6 +30,11 @@ dependencies = [
     "pillow>=10.0",
     "python-dateutil>=2.8",
     "tqdm>=4.66",
+    # --- JAX pipeline (gentle_jax) ---
+    "jax[cuda12]>=0.7.1",
+    "flax>=0.10.7",
+    "optax>=0.2.8",
+    "chex>=0.1.90",
 ]
 
 [project.optional-dependencies]
