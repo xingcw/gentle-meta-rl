@@ -70,11 +70,17 @@ class GentleConfig:
     relabel_sample_mult: int = struct.field(pytree_node=False, default=10)
     relabel_capacity_blocks: int = struct.field(pytree_node=False, default=0)
     use_next_obs_in_context: bool = struct.field(pytree_node=False, default=False)
+    reward_in_context: bool = struct.field(pytree_node=False, default=True)
 
     @property
     def context_dim(self):
         base = self.obs_dim + self.action_dim + 1
         return base + self.obs_dim if self.use_next_obs_in_context else base
+
+    @property
+    def enc_in_dim(self):
+        # context rows always store reward; the encoder may not see it
+        return self.context_dim - (0 if self.reward_in_context else 1)
 
     @property
     def relabel_batch(self):
@@ -133,11 +139,22 @@ class Nets(object):
         h = (cfg.net_size,) * 3
         self.encoder = Mlp(hidden_sizes=h, output_size=cfg.latent_dim,
                            output_activation='tanh')
+        # column to hold out of the encoder input; None keeps the full row
+        self.reward_col = (None if cfg.reward_in_context
+                           else cfg.obs_dim + cfg.action_dim)
         self.decoder = MlpDecoder(hidden_size=cfg.net_size, num_hidden_layers=3,
                                   obs_dim=cfg.obs_dim,
                                   use_next_obs_in_context=cfg.use_next_obs_in_context)
         self.qf = Mlp(hidden_sizes=h, output_size=1)
         self.policy = TanhGaussianPolicy(hidden_sizes=h, action_dim=cfg.action_dim)
+
+    def embed(self, encoder_params, context):
+        """Per-transition embeddings; every encoder application goes through here."""
+        if self.reward_col is not None:
+            context = jnp.concatenate([context[..., :self.reward_col],
+                                       context[..., self.reward_col + 1:]],
+                                      axis=-1)
+        return self.encoder.apply({'params': encoder_params}, context)
 
     def infer_z(self, encoder_params, context):
         """q(z|c) with the deterministic (non-bottleneck) encoder.
@@ -145,7 +162,7 @@ class Nets(object):
         z is the mean of the per-transition embeddings; the spread is reported
         with the unbiased estimator, as torch.std does.
         """
-        params = self.encoder.apply({'params': encoder_params}, context)
+        params = self.embed(encoder_params, context)
         return params.mean(axis=1), jnp.std(params, axis=1, ddof=1)
 
     def act(self, policy_params, obs, z, key=None, deterministic=False):
@@ -159,7 +176,7 @@ class Nets(object):
 
 def create_state(cfg, nets, key):
     keys = jax.random.split(key, 6)
-    ctx = jnp.zeros((1, 1, cfg.context_dim))
+    ctx = jnp.zeros((1, 1, cfg.enc_in_dim))
     obs_z = jnp.zeros((1, cfg.obs_dim + cfg.latent_dim))
     qf_in = jnp.zeros((1, cfg.obs_dim + cfg.action_dim + cfg.latent_dim))
 
@@ -504,7 +521,7 @@ def _rollout(env, env_params, nets, policy_params, z, key, length, stochastic=Fa
 
 def _z_from_context(nets, encoder_params, context, valid):
     """Posterior mean over the valid prefix of an accumulating context."""
-    embeddings = nets.encoder.apply({'params': encoder_params}, context)
+    embeddings = nets.embed(encoder_params, context)
     mask = valid[:, None]
     return (embeddings * mask).sum(axis=0) / mask.sum()
 
