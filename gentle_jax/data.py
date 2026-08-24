@@ -2,12 +2,19 @@
 
 The torch pipeline carries two near-identical copies of this logic
 (``pretrain_dynamics.experiment`` and ``OfflineMetaRLAlgorithm.init_buffer``);
-stages 3 and 4 share this one instead. The on-disk layout is unchanged, so
-torch- and JAX-generated datasets are interchangeable:
+stages 3 and 4 share this one instead.
+
+Two on-disk layouts are read. The dense one is preferred:
+
+    <data_dir>/goal_idx<i>/task_step<epoch>.npz
+
+holding obs, actions, rewards, ep_lengths and last_next_obs for the whole
+task in one file. The legacy layout is one object array per episode:
 
     <data_dir>/goal_idx<i>/trj_evalsample<n>_step<epoch>.npy
 
-Each file is an object array of [obs, action, reward, next_obs] rows.
+with [obs, action, reward, next_obs] rows. Both yield identical arrays, so
+torch-generated roots and either JAX layout stay interchangeable.
 """
 import glob
 import os
@@ -83,10 +90,53 @@ def _task_files(data_dir, task_idx, n_trj, epoch):
     return files
 
 
+def task_npz(data_dir, task_idx, epoch):
+    """Path of the dense one-file-per-task format."""
+    return os.path.join(data_dir, f'goal_idx{task_idx}', f'task_step{epoch}.npz')
+
+
+def _load_task_npz(path):
+    """One task from the dense format, in the legacy loader's dtypes.
+
+    next_obs is not stored: within an episode it is obs shifted by one, so
+    only the final row of each episode needs keeping. terminals likewise
+    follow from the episode lengths.
+    """
+    with np.load(path) as z:
+        obs, act = z['obs'], z['actions']
+        rew = z['rewards'].astype(np.float64).reshape(-1, 1)
+        ep_lengths, tails = z['ep_lengths'], z['last_next_obs']
+    next_obs = np.empty_like(obs)
+    terminals = np.zeros((obs.shape[0], 1))
+    start = 0
+    for e, length in enumerate(ep_lengths):
+        stop = start + int(length)
+        next_obs[start:stop - 1] = obs[start + 1:stop]
+        next_obs[stop - 1] = tails[e]
+        terminals[stop - 1] = 1
+        start = stop
+    if start != obs.shape[0]:
+        raise ValueError(f'{path}: ep_lengths sum to {start}, obs has {obs.shape[0]}')
+    return obs, act, rew, next_obs, terminals
+
+
 def load_tasks(data_dir, task_indices, n_trj, epoch):
-    """Read every trajectory of the given tasks into stacked float32 arrays."""
+    """Read every trajectory of the given tasks into stacked float32 arrays.
+
+    Prefers the dense per-task npz and falls back to the per-episode object
+    arrays, so roots written under either layout load identically.
+    """
     obs, actions, rewards, next_obs, terminals = [], [], [], [], []
     for task_idx in task_indices:
+        npz = task_npz(data_dir, task_idx, epoch)
+        if os.path.exists(npz):
+            t_obs, t_act, t_rew, t_next, t_term = _load_task_npz(npz)
+            obs.append(t_obs)
+            actions.append(t_act)
+            rewards.append(t_rew)
+            next_obs.append(t_next)
+            terminals.append(t_term)
+            continue
         files = _task_files(data_dir, task_idx, n_trj, epoch)
         if not files:
             raise FileNotFoundError(
