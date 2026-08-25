@@ -43,6 +43,7 @@ class GentleConfig:
     latent_dim: int = struct.field(pytree_node=False, default=5)
     net_size: int = struct.field(pytree_node=False, default=64)
     num_train_tasks: int = struct.field(pytree_node=False, default=10)
+    num_task_slots: int = struct.field(pytree_node=False, default=0)
     meta_batch: int = struct.field(pytree_node=False, default=10)
     batch_size: int = struct.field(pytree_node=False, default=256)
     embedding_batch_size: int = struct.field(pytree_node=False, default=256)
@@ -76,6 +77,17 @@ class GentleConfig:
     def context_dim(self):
         base = self.obs_dim + self.action_dim + 1
         return base + self.obs_dim if self.use_next_obs_in_context else base
+
+    @property
+    def task_slots(self):
+        """Task-axis width of the arrays, which sharding may pad.
+
+        A mesh cannot split 470 tasks over 4 devices, so the caller rounds the
+        task axis up and sets this. Slots at or past num_train_tasks hold
+        padding: nothing samples them and nothing reads their rows back, so
+        the extra width costs compute but does not enter training.
+        """
+        return self.num_task_slots or self.num_train_tasks
 
     @property
     def enc_in_dim(self):
@@ -201,11 +213,11 @@ def create_state(cfg, nets, key):
         encoder=encoder,
         qf1=qf1, qf2=qf2, policy=policy,
         target_qf1=qf1_params, target_qf2=qf2_params, target_policy=policy_params,
-        enc_idx=jnp.zeros((cfg.num_train_tasks, cfg.num_steps_prior), jnp.int32),
-        enc_size=jnp.zeros((cfg.num_train_tasks,), jnp.int32),
-        relabel_ctx=jnp.zeros((cfg.num_train_tasks, cfg.relabel_capacity,
+        enc_idx=jnp.zeros((cfg.task_slots, cfg.num_steps_prior), jnp.int32),
+        enc_size=jnp.zeros((cfg.task_slots,), jnp.int32),
+        relabel_ctx=jnp.zeros((cfg.task_slots, cfg.relabel_capacity,
                                cfg.context_dim)),
-        relabel_len=jnp.zeros((cfg.num_train_tasks,), jnp.int32),
+        relabel_len=jnp.zeros((cfg.task_slots,), jnp.int32),
         step=jnp.array(0, jnp.int32),
         rng=keys[5],
     )
@@ -222,11 +234,11 @@ def soft_update(params, target_params, tau):
 
 def init_enc_buffer(state, cfg, num_transitions, key):
     """Fill every task's encoder buffer, as the it_ == 0 branch of train()."""
-    idx = jax.random.randint(key, (cfg.num_train_tasks, cfg.num_steps_prior),
+    idx = jax.random.randint(key, (cfg.task_slots, cfg.num_steps_prior),
                              0, num_transitions)
     return state.replace(
         enc_idx=idx,
-        enc_size=jnp.full((cfg.num_train_tasks,), cfg.num_initial_steps, jnp.int32),
+        enc_size=jnp.full((cfg.task_slots,), cfg.num_initial_steps, jnp.int32),
     )
 
 
@@ -280,7 +292,8 @@ def make_relabel(state, cfg, nets, context_data, dynamics, key):
     `num_aug_neg_tasks` other tasks relabel the same transitions to give
     negative blocks.
     """
-    n_tasks, n_ctx = cfg.num_train_tasks, cfg.relabel_batch
+    n_tasks, n_ctx = cfg.task_slots, cfg.relabel_batch
+    n_real = cfg.num_train_tasks
     obs_dim, act_dim = cfg.obs_dim, cfg.action_dim
     tasks = jnp.arange(n_tasks)
 
@@ -328,9 +341,15 @@ def make_relabel(state, cfg, nets, context_data, dynamics, key):
     neg_keys = jax.random.split(neg_key, n_tasks)
 
     def pick_negatives(task, k):
-        others = jnp.where(jnp.arange(n_tasks) < task, jnp.arange(n_tasks),
-                           jnp.arange(n_tasks) + 1)[:n_tasks - 1]
-        return jax.random.choice(k, others, (cfg.num_aug_neg_tasks,), replace=False)
+        # candidates are the real tasks other than this one; the slice drops
+        # the padded slots along with `task` itself
+        ar = jnp.arange(n_real)
+        others = jnp.where(ar < task, ar, ar + 1)[:n_real - 1]
+        picked = jax.random.choice(k, others, (cfg.num_aug_neg_tasks,),
+                                   replace=False)
+        # a padded slot targets its own row, so its blocks land where nothing
+        # reads them rather than polluting a real task's buffer
+        return jnp.where(task < n_real, picked, task)
 
     negatives = jax.vmap(pick_negatives)(tasks, neg_keys)  # (T, num_aug)
 
