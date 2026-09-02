@@ -127,16 +127,20 @@ def train_ensembles(data, obs_dim, action_dim, hidden_dims, num_ensemble,
 
     def loss_fn(p, x, y):
         pred = apply(p, x)
-        # average over batch and dim, sum over ensemble members
-        mse = ((pred - y) ** 2).mean(axis=(1, 2)).sum()
-        return mse + _decay_loss(p, weight_decays, num_hidden)
+        # Members are summed, not averaged: their parameters are disjoint, so
+        # summing makes each member's gradient its own MSE gradient rather
+        # than a 1/num_ensemble-scaled one. The per-member vector rides along
+        # as aux so the logs can report the same reduction `validate` uses.
+        per_member = ((pred - y) ** 2).mean(axis=(1, 2))
+        obj = per_member.sum() + _decay_loss(p, weight_decays, num_hidden)
+        return obj, per_member
 
     def sgd_step(carry, batch):
         p, o = carry
         x, y = batch
-        loss, grads = jax.value_and_grad(loss_fn)(p, x, y)
+        (obj, per_member), grads = jax.value_and_grad(loss_fn, has_aux=True)(p, x, y)
         updates, o = tx.update(grads, o)
-        return (optax.apply_updates(p, updates), o), loss
+        return (optax.apply_updates(p, updates), o), (obj, per_member.mean())
 
     def train_epoch(p, o, idxes, x_all, y_all):
         # idxes is (ensemble, train_size): each member sees its own bootstrap.
@@ -144,15 +148,18 @@ def train_ensembles(data, obs_dim, action_dim, hidden_dims, num_ensemble,
         head = n_full * batch_size
         xb = x[:, :head].reshape(num_ensemble, n_full, batch_size, -1)
         yb = y[:, :head].reshape(num_ensemble, n_full, batch_size, -1)
-        (p, o), losses = jax.lax.scan(
+        (p, o), (obj, mse) = jax.lax.scan(
             sgd_step, (p, o),
             (jnp.swapaxes(xb, 0, 1), jnp.swapaxes(yb, 0, 1)))
-        losses = [losses]
+        objs, mses = [obj], [mse]
         if remainder:
             # torch's final short batch carries the same weight as a full one
-            (p, o), last = sgd_step((p, o), (x[:, head:], y[:, head:]))
-            losses.append(jnp.atleast_1d(last))
-        return p, o, jnp.concatenate(losses).mean()
+            (p, o), (last_obj, last_mse) = sgd_step(
+                (p, o), (x[:, head:], y[:, head:]))
+            objs.append(jnp.atleast_1d(last_obj))
+            mses.append(jnp.atleast_1d(last_mse))
+        return (p, o, jnp.concatenate(objs).mean(),
+                jnp.concatenate(mses).mean())
 
     def validate(p, x, y):
         return ((apply(p, x) - y) ** 2).mean(axis=(1, 2))
@@ -160,7 +167,8 @@ def train_ensembles(data, obs_dim, action_dim, hidden_dims, num_ensemble,
     def run_task(p, o, x_tr, y_tr, x_ho, y_ho, task_key):
         def epoch_body(carry, epoch_key):
             p, o, idxes, best, saved, cnt, done = carry
-            new_p, new_o, train_loss = train_epoch(p, o, idxes, x_tr, y_tr)
+            new_p, new_o, train_obj, train_mse = train_epoch(
+                p, o, idxes, x_tr, y_tr)
             new_holdout = validate(new_p, x_ho, y_ho)
 
             improved = ((best - new_holdout) / best) > IMPROVEMENT_THRESHOLD
@@ -180,7 +188,7 @@ def train_ensembles(data, obs_dim, action_dim, hidden_dims, num_ensemble,
             # reshuffle each member's bootstrap indices, as torch's shuffle_rows
             idxes = jax.random.permutation(epoch_key, idxes, axis=1, independent=True)
             return ((p, o, idxes, best, saved, cnt, done),
-                    (train_loss, new_holdout.mean(), done))
+                    (train_obj, train_mse, new_holdout.mean(), done))
 
         boot_key, scan_key = jax.random.split(task_key)
         idxes = jax.random.randint(boot_key, (num_ensemble, train_size), 0, train_size)
@@ -197,13 +205,17 @@ def train_ensembles(data, obs_dim, action_dim, hidden_dims, num_ensemble,
         holdout_inputs, holdout_targets, task_keys)
 
     if verbose:
-        train_loss, holdout_loss, done_trace = traces
+        train_obj, train_mse, holdout_loss, done_trace = traces
         stop_epoch = np.asarray(jnp.argmax(done_trace, axis=1))
+        # train and holdout are both the per-member MSE averaged over members,
+        # so the two compare directly; obj is what was actually minimized
+        # (members summed, plus weight decay) and is on a different scale.
         for t in range(num_tasks):
             last = int(stop_epoch[t]) if bool(done[t]) else max_epochs - 1
             print(f'  task {t:2d}  stopped epoch {last:3d}  '
-                  f'train {float(train_loss[t, last]):.5f}  '
-                  f'holdout {float(holdout_loss[t, last]):.5f}')
+                  f'train {float(train_mse[t, last]):.5f}  '
+                  f'holdout {float(holdout_loss[t, last]):.5f}  '
+                  f'obj {float(train_obj[t, last]):.5f}')
         if not bool(jnp.all(done)):
             print(f'  WARNING: {int((~done).sum())} task(s) hit max_epochs={max_epochs} '
                   f'without early stopping')
